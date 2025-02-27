@@ -366,13 +366,19 @@ class RightPanel(QWidget):
             row_idx += 1
 
     def display_phase_space(self, colormap='jet'):
-
-        """Display phase space plots (X-X', Y-Y', etc.) with all 6 projections"""
+        """Display all six phase space projections as in the paper"""
         if not self.analyzer.emittance_results:
             return
 
         # Get data from results
         results = self.analyzer.emittance_results
+
+        # Optionally reconstruct 4D phase space (uncomment if implemented)
+        # phase_space = self.analyzer.reconstruct_4d_phase_space(results)
+        # if phase_space is None:
+        #    return
+
+        # Extract raw data
         Xi_merge = results['Xi_merge']
         Xpi_merge = results['Xpi_merge']
         Pi_Xmerge = results['Pi_Xmerge']
@@ -416,7 +422,7 @@ class RightPanel(QWidget):
         grid_layout.addWidget(self.x_prime_y_prime_toolbar, 4, 1)
         grid_layout.addWidget(self.x_prime_y_prime_canvas, 5, 1)
 
-        # Replace old content
+        # Replace old layout
         old_layout = self.phase_space_widget.layout()
         if old_layout is not None:
             # Remove old layout widgets
@@ -433,59 +439,163 @@ class RightPanel(QWidget):
         new_layout = QVBoxLayout(self.phase_space_widget)
         new_layout.addWidget(phase_space_content)
 
-        # Create all six plots with rectangular bins
+        # Create all six plots with the new density plotting style
         # Standard x-x' plot
-        self.create_phase_plot(self.xx_canvas, "X' vs X Phase Space",
-                               Xi_merge, Xpi_merge, Pi_Xmerge,
-                               "X (mm)", "X' (mrad)",
-                               results['x_bar'], results['xp_bar'],
-                               results['emit_x'], results['x_rms'],
-                               colormap)
+        self.create_phase_density_plot(self.xx_canvas, "X' vs X Phase Space",
+                                       Xi_merge, Xpi_merge, Pi_Xmerge,
+                                       "X (mm)", "X' (mrad)",
+                                       results['x_bar'], results['xp_bar'],
+                                       results['emit_x'], results['x_rms'],
+                                       colormap)
 
         # Standard y-y' plot
-        self.create_phase_plot(self.yy_canvas, "Y' vs Y Phase Space",
-                               Yi_merge, Ypi_merge, Pi_Ymerge,
-                               "Y (mm)", "Y' (mrad)",
-                               results['y_bar'], results['yp_bar'],
-                               results['emit_y'], results['y_rms'],
-                               colormap)
+        self.create_phase_density_plot(self.yy_canvas, "Y' vs Y Phase Space",
+                                       Yi_merge, Ypi_merge, Pi_Ymerge,
+                                       "Y (mm)", "Y' (mrad)",
+                                       results['y_bar'], results['yp_bar'],
+                                       results['emit_y'], results['y_rms'],
+                                       colormap)
 
         # x-y plot
-        self.create_phase_plot(self.xy_canvas, "Y vs X Phase Space",
-                               Xi_merge, Yi_merge, Pi_Xmerge,
-                               "X (mm)", "Y (mm)",
-                               results['x_bar'], results['y_bar'],
-                               np.sqrt(abs(results['x_bar_sq'] * results['y_bar_sq'])),
-                               np.sqrt(results['x_bar_sq'] + results['y_bar_sq']),
-                               colormap, draw_ellipses=True)
+        self.create_phase_density_plot(self.xy_canvas, "Y vs X Phase Space",
+                                       Xi_merge, Yi_merge, Pi_Xmerge,
+                                       "X (mm)", "Y (mm)",
+                                       results['x_bar'], results['y_bar'],
+                                       np.sqrt(abs(results['x_bar_sq'] * results['y_bar_sq'])),
+                                       np.sqrt(results['x_bar_sq'] + results['y_bar_sq']),
+                                       colormap, draw_ellipses=False)
 
         # x-y' plot
-        self.create_phase_plot(self.xy_prime_canvas, "Y' vs X Phase Space",
-                               Xi_merge, Ypi_merge, Pi_Xmerge,
-                               "X (mm)", "Y' (mrad)",
-                               results['x_bar'], results['yp_bar'],
-                               np.sqrt(abs(results['x_bar_sq'] * results['Ypi_sq'])),
-                               np.sqrt(results['x_bar_sq'] + results['Ypi_sq']),
-                               colormap, draw_ellipses=True)
+        self.create_phase_density_plot(self.xy_prime_canvas, "Y' vs X Phase Space",
+                                       Xi_merge, Ypi_merge, Pi_Xmerge,
+                                       "X (mm)", "Y' (mrad)",
+                                       results['x_bar'], results['yp_bar'],
+                                       np.sqrt(abs(results['x_bar_sq'] * results['Ypi_sq'])),
+                                       np.sqrt(results['x_bar_sq'] + results['Ypi_sq']),
+                                       colormap, draw_ellipses=False)
 
         # x'-y plot
-        self.create_phase_plot(self.x_prime_y_canvas, "Y vs X' Phase Space",
-                               Xpi_merge, Yi_merge, Pi_Xmerge,
-                               "X' (mrad)", "Y (mm)",
-                               results['xp_bar'], results['y_bar'],
-                               np.sqrt(abs(results['Xpi_sq'] * results['y_bar_sq'])),
-                               np.sqrt(results['Xpi_sq'] + results['y_bar_sq']),
-                               colormap, draw_ellipses=True)
+        self.create_phase_density_plot(self.x_prime_y_canvas, "Y vs X' Phase Space",
+                                       Xpi_merge, Yi_merge, Pi_Xmerge,
+                                       "X' (mrad)", "Y (mm)",
+                                       results['xp_bar'], results['y_bar'],
+                                       np.sqrt(abs(results['Xpi_sq'] * results['y_bar_sq'])),
+                                       np.sqrt(results['Xpi_sq'] + results['y_bar_sq']),
+                                       colormap, draw_ellipses=False)
 
         # x'-y' plot
-        self.create_phase_plot(self.x_prime_y_prime_canvas, "Y' vs X' Phase Space",
-                               Xpi_merge, Ypi_merge, Pi_Xmerge,
-                               "X' (mrad)", "Y' (mrad)",
-                               results['xp_bar'], results['yp_bar'],
-                               np.sqrt(abs(results['Xpi_sq'] * results['Ypi_sq'])),
-                               np.sqrt(results['Xpi_sq'] + results['Ypi_sq']),
-                               colormap, draw_ellipses=True)
+        self.create_phase_density_plot(self.x_prime_y_prime_canvas, "Y' vs X' Phase Space",
+                                       Xpi_merge, Ypi_merge, Pi_Xmerge,
+                                       "X' (mrad)", "Y' (mrad)",
+                                       results['xp_bar'], results['yp_bar'],
+                                       np.sqrt(abs(results['Xpi_sq'] * results['Ypi_sq'])),
+                                       np.sqrt(results['Xpi_sq'] + results['Ypi_sq']),
+                                       colormap, draw_ellipses=False)
 
+    def create_phase_density_plot(self, canvas, title, x_data, y_data, intensity_data,
+                                  x_label, y_label, x_mean, y_mean, emittance, rms,
+                                  colormap='jet', draw_ellipses=True):
+        """Create a phase space density plot similar to those in the paper"""
+        # Clear the canvas
+        canvas.fig.clear()
+        ax = canvas.fig.add_subplot(111)
+
+        # Ensure all arrays have the same length
+        min_len = min(len(x_data), len(y_data), len(intensity_data))
+        x_data = x_data[:min_len]
+        y_data = y_data[:min_len]
+        intensity_data = intensity_data[:min_len]
+
+        # Skip if not enough data points
+        if min_len < 10:
+            ax.text(0.5, 0.5, "Insufficient data points for visualization",
+                    ha='center', va='center', transform=ax.transAxes)
+            canvas.draw()
+            return
+
+        # Create 2D histogram with weighted values (this represents phase space density)
+        nbins = 50  # Higher resolution than before
+
+        # Calculate appropriate range with margin
+        x_min, x_max = np.min(x_data), np.max(x_data)
+        y_min, y_max = np.min(y_data), np.max(y_data)
+        x_margin = 0.1 * (x_max - x_min)
+        y_margin = 0.1 * (y_max - y_min)
+
+        try:
+            # Create 2D histogram with weighted values
+            hist, x_edges, y_edges = np.histogram2d(
+                x_data, y_data,
+                bins=nbins,
+                range=[[x_min - x_margin, x_max + x_margin], [y_min - y_margin, y_max + y_margin]],
+                weights=intensity_data
+            )
+
+            # Normalize histogram by bin counts
+            counts, _, _ = np.histogram2d(
+                x_data, y_data,
+                bins=nbins,
+                range=[[x_min - x_margin, x_max + x_margin], [y_min - y_margin, y_max + y_margin]]
+            )
+
+            # Avoid division by zero
+            hist_norm = np.divide(hist, counts, out=np.zeros_like(hist), where=counts > 0)
+
+            # Get colormap
+            cmap = plt.get_cmap(colormap)
+
+            # Create a pcolormesh plot like in the paper with interpolation
+            mesh = ax.pcolormesh(x_edges, y_edges, hist_norm.T,
+                                 cmap=cmap, shading='auto')
+
+            # Add contour lines for better visualization (similar to paper)
+            if np.max(hist_norm) > 0:  # Only add contours if we have meaningful data
+                contour_levels = np.linspace(0, np.max(hist_norm) * 0.95, 8)
+                if len(contour_levels) > 2:  # Only add contours if we have enough levels
+                    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+                    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+                    X, Y = np.meshgrid(x_centers, y_centers)
+                    contours = ax.contour(X, Y, hist_norm.T,
+                                          levels=contour_levels,
+                                          colors='white', linewidths=0.5, alpha=0.7)
+
+            # Draw RMS ellipses if requested
+            if draw_ellipses:
+                # 1-sigma ellipse (red)
+                theta = np.linspace(0, 2 * np.pi, 100)
+                x = x_mean + np.sqrt(emittance) * np.cos(theta)
+                y = y_mean + np.sqrt(emittance) * np.sin(theta)
+                ax.plot(x, y, 'r-', linewidth=1.5, alpha=0.8)
+
+            # Add colorbar
+            cbar = canvas.fig.colorbar(mesh, ax=ax)
+            cbar.set_label('Phase Space Density')
+
+        except Exception as e:
+            # Fall back to scatter plot if histogram fails
+            print(f"Error creating histogram plot: {e}")
+            scatter = ax.scatter(x_data, y_data, c=intensity_data,
+                                 cmap=colormap, alpha=0.7, s=5)
+
+            # Add colorbar for scatter plot
+            cbar = canvas.fig.colorbar(scatter, ax=ax)
+            cbar.set_label('Intensity')
+
+        # Set labels and title
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title(title)
+
+        # Store axes reference
+        canvas.axes = ax
+
+        # Adjust layout and draw
+        try:
+            canvas.fig.tight_layout()
+        except:
+            pass
+
+        canvas.draw()
     def clear_layout(self, layout):
         """Clear all widgets from a layout"""
         if layout is not None:

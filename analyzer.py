@@ -123,6 +123,64 @@ class PepperPotAnalyzer:
 
         return i_out, j_out
 
+    def reconstruct_4d_phase_space(self, results):
+        """Reconstruct 4D phase space density according to the paper methodology"""
+        if not results:
+            return None
+
+        # Extract data from results
+        Xi_merge = results['Xi_merge']  # x positions
+        Xpi_merge = results['Xpi_merge']  # x' angles
+        Yi_merge = results['Yi_merge']  # y positions
+        Ypi_merge = results['Ypi_merge']  # y' angles
+        Pi_Xmerge = results['Pi_Xmerge']  # Intensity weights
+
+        # Create phase space coordinates for each beamlet
+        x_positions = self.clean_hole_sizes
+        hole_coordinates = self.hole_coordinates
+
+        # Calculate correlation coefficients (r) for each beamlet
+        # Default to zero if not calculable (the paper mentions this term is often low)
+        r_values = np.zeros(len(hole_coordinates))
+
+        # Create a dictionary to store phase space projections
+        phase_space = {
+            'xx_prime': {'x': Xi_merge, 'y': Xpi_merge, 'density': Pi_Xmerge},
+            'yy_prime': {'x': Yi_merge, 'y': Ypi_merge, 'density': Pi_Xmerge},
+            'xy': {'x': Xi_merge, 'y': Yi_merge, 'density': Pi_Xmerge},
+            'xy_prime': {'x': Xi_merge, 'y': Ypi_merge, 'density': Pi_Xmerge},
+            'x_prime_y': {'x': Xpi_merge, 'y': Yi_merge, 'density': Pi_Xmerge},
+            'x_prime_y_prime': {'x': Xpi_merge, 'y': Ypi_merge, 'density': Pi_Xmerge}
+        }
+
+        return phase_space
+
+    def ensure_consistent_data(self, results):
+        """Ensure all arrays in the results have consistent lengths"""
+        if not results:
+            return results
+
+        # Find minimum length across all array data
+        array_keys = ['Xi_merge', 'Pi_Xmerge', 'Yi_merge', 'Pi_Ymerge', 'Xpi_merge', 'Ypi_merge', 'XO_merge',
+                      'YO_merge']
+        lengths = []
+
+        for key in array_keys:
+            if key in results and isinstance(results[key], np.ndarray):
+                lengths.append(len(results[key]))
+
+        if not lengths:
+            return results  # No arrays found
+
+        # Get minimum length
+        min_len = min(lengths)
+
+        # Truncate all arrays to minimum length
+        for key in array_keys:
+            if key in results and isinstance(results[key], np.ndarray):
+                results[key] = results[key][:min_len]
+
+        return results
     def radial_profile(self, data, center):
         """Calculate radial profile around a point"""
         y, x = np.indices((data.shape))
@@ -379,5 +437,6 @@ class PepperPotAnalyzer:
             'YO_merge': YO_merge
         }
 
+        results = self.ensure_consistent_data(results)
         self.emittance_results = results
         return results
