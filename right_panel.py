@@ -39,6 +39,12 @@ class RightPanel(QWidget):
         # Analysis parameters group
         self.analysis_group = QGroupBox("Analysis Parameters")
         self.analysis_layout = QGridLayout(self.analysis_group)
+        self.analysis_layout.addWidget(QLabel("Bin Count:"), 5, 0)
+        self.bin_count_spin = QSpinBox()
+        self.bin_count_spin.setRange(10, 200)
+        self.bin_count_spin.setValue(50)
+        self.bin_count_spin.setSingleStep(10)
+        self.analysis_layout.addWidget(self.bin_count_spin, 5, 1)
         
         # Scaling
         self.analysis_layout.addWidget(QLabel("Scaling (mm/pixel):"), 0, 0)
@@ -58,7 +64,7 @@ class RightPanel(QWidget):
         self.analysis_layout.addWidget(self.offset_spin, 0, 3)
         
         # Distance
-        self.analysis_layout.addWidget(QLabel("Distance L (mm):"), 1, 0)
+        self.analysis_layout.addWidget(QLabel("Drift Distance L (mm):"), 1, 0)
         self.distance_spin = QDoubleSpinBox()
         self.distance_spin.setRange(1, 1000)
         self.distance_spin.setValue(41)
@@ -73,12 +79,12 @@ class RightPanel(QWidget):
         self.analysis_layout.addWidget(QLabel("Y0 Positions:"), 3, 0)
         self.y0_edit = QLineEdit("-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1,0,1,2,3,4,5,6,7,8,9,10,11,12")
         self.analysis_layout.addWidget(self.y0_edit, 3, 1, 1, 3)
-        
+
         # Analyze button
         self.analyze_btn = QPushButton("Analyze Beam Spots")
         self.analyze_btn.clicked.connect(self.analyze_spots)
         self.analysis_layout.addWidget(self.analyze_btn, 4, 0, 1, 4)
-        
+
         # Results tabs
         self.results_tabs = QTabWidget()
         
@@ -360,7 +366,8 @@ class RightPanel(QWidget):
             row_idx += 1
 
     def display_phase_space(self, colormap='jet'):
-        """Display phase space plots (X-X' and Y-Y') similar to academic publications"""
+
+        """Display phase space plots (X-X', Y-Y', etc.) with all 6 projections"""
         if not self.analyzer.emittance_results:
             return
 
@@ -372,9 +379,303 @@ class RightPanel(QWidget):
         Yi_merge = results['Yi_merge']
         Ypi_merge = results['Ypi_merge']
         Pi_Ymerge = results['Pi_Ymerge']
-        XO_merge = results['XO_merge']
-        YO_merge = results['YO_merge']
 
+        # Create a widget to replace existing content
+        phase_space_content = QWidget()
+        grid_layout = QGridLayout(phase_space_content)
+
+        # Create all canvases
+        self.xx_canvas = MatplotlibCanvas(None, width=5, height=4)
+        self.yy_canvas = MatplotlibCanvas(None, width=5, height=4)
+        self.xy_canvas = MatplotlibCanvas(None, width=5, height=4)
+        self.xy_prime_canvas = MatplotlibCanvas(None, width=5, height=4)
+        self.x_prime_y_canvas = MatplotlibCanvas(None, width=5, height=4)
+        self.x_prime_y_prime_canvas = MatplotlibCanvas(None, width=5, height=4)
+
+        # Create all toolbars
+        self.xx_toolbar = NavigationToolbar(self.xx_canvas, None)
+        self.yy_toolbar = NavigationToolbar(self.yy_canvas, None)
+        self.xy_toolbar = NavigationToolbar(self.xy_canvas, None)
+        self.xy_prime_toolbar = NavigationToolbar(self.xy_prime_canvas, None)
+        self.x_prime_y_toolbar = NavigationToolbar(self.x_prime_y_canvas, None)
+        self.x_prime_y_prime_toolbar = NavigationToolbar(self.x_prime_y_prime_canvas, None)
+
+        # Add all widgets to layout
+        grid_layout.addWidget(self.xx_toolbar, 0, 0)
+        grid_layout.addWidget(self.xx_canvas, 1, 0)
+        grid_layout.addWidget(self.yy_toolbar, 0, 1)
+        grid_layout.addWidget(self.yy_canvas, 1, 1)
+
+        grid_layout.addWidget(self.xy_toolbar, 2, 0)
+        grid_layout.addWidget(self.xy_canvas, 3, 0)
+        grid_layout.addWidget(self.xy_prime_toolbar, 2, 1)
+        grid_layout.addWidget(self.xy_prime_canvas, 3, 1)
+
+        grid_layout.addWidget(self.x_prime_y_toolbar, 4, 0)
+        grid_layout.addWidget(self.x_prime_y_canvas, 5, 0)
+        grid_layout.addWidget(self.x_prime_y_prime_toolbar, 4, 1)
+        grid_layout.addWidget(self.x_prime_y_prime_canvas, 5, 1)
+
+        # Replace old content
+        old_layout = self.phase_space_widget.layout()
+        if old_layout is not None:
+            # Remove old layout widgets
+            while old_layout.count():
+                item = old_layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+
+            # Delete old layout
+            QWidget().setLayout(old_layout)
+
+        # Set new layout with content
+        new_layout = QVBoxLayout(self.phase_space_widget)
+        new_layout.addWidget(phase_space_content)
+
+        # Create all six plots with rectangular bins
+        # Standard x-x' plot
+        self.create_phase_plot(self.xx_canvas, "X' vs X Phase Space",
+                               Xi_merge, Xpi_merge, Pi_Xmerge,
+                               "X (mm)", "X' (mrad)",
+                               results['x_bar'], results['xp_bar'],
+                               results['emit_x'], results['x_rms'],
+                               colormap)
+
+        # Standard y-y' plot
+        self.create_phase_plot(self.yy_canvas, "Y' vs Y Phase Space",
+                               Yi_merge, Ypi_merge, Pi_Ymerge,
+                               "Y (mm)", "Y' (mrad)",
+                               results['y_bar'], results['yp_bar'],
+                               results['emit_y'], results['y_rms'],
+                               colormap)
+
+        # x-y plot
+        self.create_phase_plot(self.xy_canvas, "Y vs X Phase Space",
+                               Xi_merge, Yi_merge, Pi_Xmerge,
+                               "X (mm)", "Y (mm)",
+                               results['x_bar'], results['y_bar'],
+                               np.sqrt(abs(results['x_bar_sq'] * results['y_bar_sq'])),
+                               np.sqrt(results['x_bar_sq'] + results['y_bar_sq']),
+                               colormap, draw_ellipses=True)
+
+        # x-y' plot
+        self.create_phase_plot(self.xy_prime_canvas, "Y' vs X Phase Space",
+                               Xi_merge, Ypi_merge, Pi_Xmerge,
+                               "X (mm)", "Y' (mrad)",
+                               results['x_bar'], results['yp_bar'],
+                               np.sqrt(abs(results['x_bar_sq'] * results['Ypi_sq'])),
+                               np.sqrt(results['x_bar_sq'] + results['Ypi_sq']),
+                               colormap, draw_ellipses=True)
+
+        # x'-y plot
+        self.create_phase_plot(self.x_prime_y_canvas, "Y vs X' Phase Space",
+                               Xpi_merge, Yi_merge, Pi_Xmerge,
+                               "X' (mrad)", "Y (mm)",
+                               results['xp_bar'], results['y_bar'],
+                               np.sqrt(abs(results['Xpi_sq'] * results['y_bar_sq'])),
+                               np.sqrt(results['Xpi_sq'] + results['y_bar_sq']),
+                               colormap, draw_ellipses=True)
+
+        # x'-y' plot
+        self.create_phase_plot(self.x_prime_y_prime_canvas, "Y' vs X' Phase Space",
+                               Xpi_merge, Ypi_merge, Pi_Xmerge,
+                               "X' (mrad)", "Y' (mrad)",
+                               results['xp_bar'], results['yp_bar'],
+                               np.sqrt(abs(results['Xpi_sq'] * results['Ypi_sq'])),
+                               np.sqrt(results['Xpi_sq'] + results['Ypi_sq']),
+                               colormap, draw_ellipses=True)
+
+    def clear_layout(self, layout):
+        """Clear all widgets from a layout"""
+        if layout is not None:
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+                else:
+                    self.clear_layout(item.layout())
+
+    def create_phase_plot(self, canvas, title, x_data, y_data, intensity_data,
+                          x_label, y_label, x_mean, y_mean, emittance, rms,
+                          colormap='jet', draw_ellipses=False):
+        """Create a phase space plot with academic styling using rectangular bins"""
+        # Clear the canvas
+        canvas.fig.clear()
+        ax = canvas.fig.add_subplot(111)
+
+        # Ensure all arrays have the same length by trimming to the minimum length
+        min_len = min(len(x_data), len(y_data), len(intensity_data))
+        x_data = x_data[:min_len]
+        y_data = y_data[:min_len]
+        intensity_data = intensity_data[:min_len]
+
+        # Create a colormap for the data
+        cmap = plt.get_cmap(colormap)
+
+        # Use histogram2d for rectangular bins
+        x_min, x_max = np.min(x_data), np.max(x_data)
+        y_min, y_max = np.min(y_data), np.max(y_data)
+
+        # Add small margin
+        x_margin = 0.05 * (x_max - x_min)
+        y_margin = 0.05 * (y_max - y_min)
+
+        # Set number of bins
+        nbins = 200
+
+        # Create 2D histogram with weighted values
+        hist, x_edges, y_edges = np.histogram2d(
+            x_data, y_data,
+            bins=nbins,
+            range=[[x_min - x_margin, x_max + x_margin], [y_min - y_margin, y_max + y_margin]],
+            weights=intensity_data
+        )
+
+        # Normalize histogram by the bin counts
+        counts, _, _ = np.histogram2d(
+            x_data, y_data,
+            bins=nbins,
+            range=[[x_min - x_margin, x_max + x_margin], [y_min - y_margin, y_max + y_margin]]
+        )
+
+        # Avoid division by zero
+        hist_norm = np.divide(hist, counts, out=np.zeros_like(hist), where=counts > 0)
+
+        # Plot the histogram as an image
+        im = ax.imshow(
+            hist_norm.T,  # Transpose for correct orientation
+            origin='lower',
+            extent=[x_edges[0], x_edges[-1], y_edges[0], y_edges[-1]],
+            aspect='auto',
+            cmap=cmap,
+            interpolation='nearest'
+        )
+
+        # Set limits with small margin
+        ax.set_xlim(x_min - x_margin, x_max + x_margin)
+        ax.set_ylim(y_min - y_margin, y_max + y_margin)
+
+        # Add grid lines
+        ax.grid(True, linestyle='--', alpha=0.5, color='gray')
+
+        # Add RMS ellipses for normal phase space plots
+        if draw_ellipses and self.analyzer.emittance_results:
+            try:
+                # For x-x' or y-y' plots, calculate and draw ellipses
+                if ('X\'' in title and 'X Phase' in title) or ('Y\'' in title and 'Y Phase' in title):
+                    self.add_rms_ellipses_simple(ax, x_mean, y_mean, emittance)
+            except Exception as e:
+                print(f"Error drawing ellipses: {e}")
+
+        # Add info text in a small box in the corner - only for x-x' and y-y' plots
+        if draw_ellipses:
+            try:
+                if 'X\'' in title and 'X Phase' in title:
+                    # Calculate Twiss parameters for x-x'
+                    twiss_data = self.analyzer.emittance_results
+                    alpha_x = -twiss_data['xxp'] / np.sqrt(abs(twiss_data['x_bar_sq'] * twiss_data['Xpi_sq']))
+                    beta_x = twiss_data['x_bar_sq'] / np.sqrt(abs(twiss_data['emit_x_sq']))
+                    gamma_x = twiss_data['Xpi_sq'] / np.sqrt(abs(twiss_data['emit_x_sq']))
+
+                    info_text = f"Emittance (ε): {emittance:.4f} mm·mrad\n"
+                    info_text += f"RMS Size: {rms:.4f} mm\n"
+                    info_text += f"Twiss Parameters: α={alpha_x:.4f}, β={beta_x:.4f}, γ={gamma_x:.4f}"
+
+                    # Place text box at the bottom of the plot
+                    ax.text(0.5, 0.02, info_text,
+                            transform=ax.transAxes, fontsize=8,
+                            horizontalalignment='center', verticalalignment='bottom',
+                            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+
+                elif 'Y\'' in title and 'Y Phase' in title:
+                    # Calculate Twiss parameters for y-y'
+                    twiss_data = self.analyzer.emittance_results
+                    alpha_y = -twiss_data['yyp'] / np.sqrt(abs(twiss_data['y_bar_sq'] * twiss_data['Ypi_sq']))
+                    beta_y = twiss_data['y_bar_sq'] / np.sqrt(abs(twiss_data['emit_y_sq']))
+                    gamma_y = twiss_data['Ypi_sq'] / np.sqrt(abs(twiss_data['emit_y_sq']))
+
+                    info_text = f"Emittance (ε): {emittance:.4f} mm·mrad\n"
+                    info_text += f"RMS Size: {rms:.4f} mm\n"
+                    info_text += f"Twiss Parameters: α={alpha_y:.4f}, β={beta_y:.4f}, γ={gamma_y:.4f}"
+
+                    # Place text box at the bottom of the plot
+                    ax.text(0.5, 0.02, info_text,
+                            transform=ax.transAxes, fontsize=8,
+                            horizontalalignment='center', verticalalignment='bottom',
+                            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+            except Exception as e:
+                print(f"Error adding info text: {e}")
+
+        # Add axis labels and title
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title(title)
+
+        # Add colorbar
+        cbar = canvas.fig.colorbar(im, ax=ax)
+        cbar.set_label('Intensity')
+
+        # Store axes reference
+        canvas.axes = ax
+
+        # Adjust layout and draw
+        try:
+            canvas.fig.tight_layout()
+        except:
+            pass
+
+        canvas.draw()
+
+    def add_rms_ellipses_simple(self, ax, x_mean, y_mean, emittance):
+        """Add simple RMS ellipses to phase space plots with proper coloring"""
+        # Use Twiss parameters if available
+        if self.analyzer.emittance_results:
+            results = self.analyzer.emittance_results
+
+            # Check if this is an x-x' or y-y' plot
+            is_x_plot = 'xx' in ax.get_xlabel().lower() or 'x' in ax.get_ylabel().lower()
+
+            try:
+                if is_x_plot:
+                    alpha = -results['xxp'] / np.sqrt(abs(results['x_bar_sq'] * results['Xpi_sq']))
+                    beta = results['x_bar_sq'] / np.sqrt(abs(results['emit_x_sq']))
+                    gamma = results['Xpi_sq'] / np.sqrt(abs(results['emit_x_sq']))
+                else:
+                    alpha = -results['yyp'] / np.sqrt(abs(results['y_bar_sq'] * results['Ypi_sq']))
+                    beta = results['y_bar_sq'] / np.sqrt(abs(results['emit_y_sq']))
+                    gamma = results['Ypi_sq'] / np.sqrt(abs(results['emit_y_sq']))
+
+                # Draw ellipses for 1σ, 2σ, and 3σ
+                for n_sigma, style in [(1, {'color': 'red', 'linestyle': '-', 'linewidth': 1.5, 'label': '1σ'}),
+                                       (2, {'color': 'orange', 'linestyle': '--', 'linewidth': 1.2, 'label': '2σ'}),
+                                       (3, {'color': 'gold', 'linestyle': ':', 'linewidth': 1.0, 'label': '3σ'})]:
+                    theta = np.linspace(0, 2 * np.pi, 100)
+                    area = n_sigma * np.sqrt(emittance)
+
+                    # Calculate ellipse coordinates using Twiss parameters
+                    x = x_mean + area * np.sqrt(beta) * np.cos(theta)
+                    y = y_mean + area * (alpha * np.cos(theta) + np.sqrt(gamma) * np.sin(theta)) / np.sqrt(beta)
+
+                    # Plot the ellipse
+                    ax.plot(x, y, **style)
+
+                # Add legend
+                ax.legend(loc='upper right', fontsize=8)
+
+            except Exception as e:
+                print(f"Error drawing Twiss ellipses: {e}")
+                # Fallback to simple circles if Twiss calculation fails
+                for n_sigma, style in [(1, {'color': 'red', 'linestyle': '-', 'linewidth': 1.5, 'label': '1σ'}),
+                                       (2, {'color': 'orange', 'linestyle': '--', 'linewidth': 1.2, 'label': '2σ'}),
+                                       (3, {'color': 'gold', 'linestyle': ':', 'linewidth': 1.0, 'label': '3σ'})]:
+                    theta = np.linspace(0, 2 * np.pi, 100)
+                    radius = n_sigma * np.sqrt(emittance)
+                    x = x_mean + radius * np.cos(theta)
+                    y = y_mean + radius * np.sin(theta)
+                    ax.plot(x, y, **style)
+                ax.legend(loc='upper right', fontsize=8)
     def setup_phase_plot(self, canvas, title, x_data, y_data, intensity_data,
                          x_label, y_label, x_mean, y_mean, emittance, rms,
                          colormap='jet'):

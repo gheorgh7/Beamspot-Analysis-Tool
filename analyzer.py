@@ -242,6 +242,9 @@ class PepperPotAnalyzer:
         Yi_range_list = []
         Pi_Yrange_list = []
 
+        # Debug prints
+        print(f"Processing {len(hole_data)} holes")
+
         # Process each hole
         for idx, (hole_img, hole_size) in enumerate(zip(hole_data, hole_sizes)):
             # Extract hole coordinates
@@ -255,11 +258,35 @@ class PepperPotAnalyzer:
             x_profile = np.sum(hole_img, axis=0)
             y_profile = np.sum(hole_img, axis=1)
 
+            # Ensure same length for x_range and x_profile
+            min_len_x = min(len(x_range), len(x_profile))
+            x_range = x_range[:min_len_x]
+            x_profile = x_profile[:min_len_x]
+
+            # Ensure same length for y_range and y_profile
+            min_len_y = min(len(y_range), len(y_profile))
+            y_range = y_range[:min_len_y]
+            y_profile = y_profile[:min_len_y]
+
             # Store coordinate ranges and profiles
             Xi_range_list.append(x_range)
             Pi_Xrange_list.append(x_profile)
             Yi_range_list.append(y_range)
             Pi_Yrange_list.append(y_profile)
+
+        # Merge all ranges and profiles
+        try:
+            Xi_merge = np.concatenate(Xi_range_list)
+            Pi_Xmerge = np.concatenate(Pi_Xrange_list)
+            Yi_merge = np.concatenate(Yi_range_list)
+            Pi_Ymerge = np.concatenate(Pi_Yrange_list)
+        except Exception as e:
+            print(f"Merge error: {e}")
+            print(f"X lengths: {[len(x) for x in Xi_range_list]} total: {sum(len(x) for x in Xi_range_list)}")
+            print(f"X-profile lengths: {[len(p) for p in Pi_Xrange_list]} total: {sum(len(p) for p in Pi_Xrange_list)}")
+            print(f"Y lengths: {[len(y) for y in Yi_range_list]} total: {sum(len(y) for y in Yi_range_list)}")
+            print(f"Y-profile lengths: {[len(p) for p in Pi_Yrange_list]} total: {sum(len(p) for p in Pi_Yrange_list)}")
+            return {}
 
         # Merge all ranges and profiles
         Xi_merge = np.concatenate(Xi_range_list)
