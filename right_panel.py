@@ -301,18 +301,18 @@ class RightPanel(QWidget):
             pass
                 
         self.spots_canvas.draw()
-    
+
     def display_emittance_results(self, results):
-        """Display emittance calculation results in a table with improved formatting"""
+        """Display emittance calculation results in a table without highlighting"""
         if not results:
             return
-            
+
         # Clear table
         self.emittance_table.setRowCount(0)
-            
+
         # Add results to table
         row_idx = 0
-            
+
         # X emittance parameters with formatting and units
         for param, value, unit in [
             ("<X>", results['x_bar'], "mm"),
@@ -327,28 +327,18 @@ class RightPanel(QWidget):
             self.emittance_table.insertRow(row_idx)
             param_item = QTableWidgetItem(param)
             value_item = QTableWidgetItem(f"{value:.6f} {unit}")
-            
-            # Highlight important emittance value with subtle highlight
-            if param == "ε_x":
-                # Use a more subtle highlight (light green) with black text
-                param_item.setBackground(QColor(220, 240, 220))  # Lighter green
-                value_item.setBackground(QColor(220, 240, 220))
-                # Use bold font but keep black text
-                font = QFont()
-                font.setBold(True)
-                param_item.setFont(font)
-                value_item.setFont(font)
-            
+
+            # No highlighting for ε_x
             self.emittance_table.setItem(row_idx, 0, param_item)
             self.emittance_table.setItem(row_idx, 1, value_item)
             row_idx += 1
-            
+
         # Spacer row
         self.emittance_table.insertRow(row_idx)
         self.emittance_table.setItem(row_idx, 0, QTableWidgetItem(""))
         self.emittance_table.setItem(row_idx, 1, QTableWidgetItem(""))
         row_idx += 1
-            
+
         # Y emittance parameters with formatting and units
         for param, value, unit in [
             ("<Y>", results['y_bar'], "mm"),
@@ -363,27 +353,17 @@ class RightPanel(QWidget):
             self.emittance_table.insertRow(row_idx)
             param_item = QTableWidgetItem(param)
             value_item = QTableWidgetItem(f"{value:.6f} {unit}")
-            
-            # Highlight important emittance value with subtle highlight
-            if param == "ε_y":
-                # Use a more subtle highlight (light blue) with black text
-                param_item.setBackground(QColor(220, 220, 240))  # Lighter blue
-                value_item.setBackground(QColor(220, 220, 240))
-                # Use bold font but keep black text
-                font = QFont()
-                font.setBold(True)
-                param_item.setFont(font)
-                value_item.setFont(font)
-                
+
+            # No highlighting for ε_y
             self.emittance_table.setItem(row_idx, 0, param_item)
             self.emittance_table.setItem(row_idx, 1, value_item)
             row_idx += 1
-    
+
     def display_phase_space(self, colormap='jet'):
-        """Display phase space plots (X-X' and Y-Y') with profiles integrated on axes"""
+        """Display phase space plots (X-X' and Y-Y') similar to academic publications"""
         if not self.analyzer.emittance_results:
             return
-            
+
         # Get data from results
         results = self.analyzer.emittance_results
         Xi_merge = results['Xi_merge']
@@ -394,27 +374,85 @@ class RightPanel(QWidget):
         Pi_Ymerge = results['Pi_Ymerge']
         XO_merge = results['XO_merge']
         YO_merge = results['YO_merge']
-            
-        # Create figures with improved layout for both phase space plots
-        self.setup_integrated_phase_plot(
-            self.xx_canvas, "X' vs X Phase Space", 
-            XO_merge, Xpi_merge, Pi_Xmerge, 
-            "X (mm)", "X' (mrad)", 
-            results['x_bar'], results['xp_bar'],
-            results['emit_x'], results['x_rms'],
-            colormap
-        )
-                                  
-        self.setup_integrated_phase_plot(
-            self.yy_canvas, "Y' vs Y Phase Space", 
-            YO_merge, Ypi_merge, Pi_Ymerge, 
-            "Y (mm)", "Y' (mrad)", 
-            results['y_bar'], results['yp_bar'],
-            results['emit_y'], results['y_rms'],
-            colormap
-        )
-    
-    def setup_integrated_phase_plot(self, canvas, title, x_data, y_data, intensity_data, 
+
+    def setup_phase_plot(self, canvas, title, x_data, y_data, intensity_data,
+                         x_label, y_label, x_mean, y_mean, emittance, rms,
+                         colormap='jet'):
+        """Create a phase space plot in academic style without profiles"""
+        # Clear the canvas
+        canvas.fig.clear()
+
+        # Create a single axes for the main plot (no integrated profiles)
+        ax_main = canvas.fig.add_subplot(111)
+
+        # Use scatter plot without log scale, similar to the academic paper style
+        scatter = ax_main.scatter(x_data, y_data, c=intensity_data,
+                                  cmap=colormap, alpha=0.7, s=5)
+
+        # Set limits with margin
+        x_min, x_max = np.min(x_data), np.max(x_data)
+        y_min, y_max = np.min(y_data), np.max(y_data)
+        x_margin = 0.05 * (x_max - x_min)
+        y_margin = 0.05 * (y_max - y_min)
+
+        ax_main.set_xlim(x_min - x_margin, x_max + x_margin)
+        ax_main.set_ylim(y_min - y_margin, y_max + y_margin)
+
+        # Add grid lines (subtle)
+        ax_main.grid(True, linestyle='--', alpha=0.6)
+
+        # Add RMS ellipses to the phase space plot
+        self.add_rms_ellipses(ax_main, x_mean, y_mean, emittance)
+
+        # Calculate Twiss parameters
+        if self.analyzer.emittance_results:
+            twiss_data = self.analyzer.emittance_results
+
+            try:
+                twiss_alpha = -twiss_data['xxp'] / np.sqrt(abs(twiss_data['x_bar_sq'] * twiss_data['Xpi_sq']))
+                twiss_beta = twiss_data['x_bar_sq'] / np.sqrt(abs(twiss_data['emit_x_sq']))
+                twiss_gamma = twiss_data['Xpi_sq'] / np.sqrt(abs(twiss_data['emit_x_sq']))
+
+                info_text = f"Emittance (ε): {emittance:.4f} mm·mrad\n"
+                info_text += f"RMS Size: {rms:.4f} mm\n"
+                info_text += f"Twiss Parameters: α={twiss_alpha:.4f}, β={twiss_beta:.4f}, γ={twiss_gamma:.4f}"
+            except:
+                # Fallback if calculation fails
+                info_text = f"Emittance (ε): {emittance:.4f} mm·mrad\n"
+                info_text += f"RMS Size: {rms:.4f} mm"
+        else:
+            # Fallback if no twiss parameters are available
+            info_text = f"Emittance (ε): {emittance:.4f} mm·mrad\n"
+            info_text += f"RMS Size: {rms:.4f} mm"
+
+        # Add info text in a small box in the corner
+        ax_main.text(0.98, 0.02, info_text,
+                     transform=ax_main.transAxes, fontsize=9,
+                     horizontalalignment='right', verticalalignment='bottom',
+                     bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+
+        # Add title and labels with academic style
+        ax_main.set_title(title, fontsize=12)
+        ax_main.set_xlabel(x_label)
+        ax_main.set_ylabel(y_label)
+
+        # Add colorbar
+        cbar = canvas.fig.colorbar(scatter, ax=ax_main)
+        cbar.set_label('Intensity')
+
+        # Store main axes reference
+        canvas.axes = ax_main
+
+        try:
+            # Adjust layout
+            canvas.fig.tight_layout()
+        except:
+            # Fall back to simple draw if adjustment fails
+            pass
+
+        canvas.draw()
+
+    def setup_integrated_phase_plot(self, canvas, title, x_data, y_data, intensity_data,
                                   x_label, y_label, x_mean, y_mean, emittance, rms,
                                   colormap='jet'):
         """Create a phase space plot with profiles integrated on axes"""
@@ -426,13 +464,7 @@ class RightPanel(QWidget):
         
         # Main phase space plot
         ax_main = canvas.fig.add_subplot(gs[1, 1])
-        
-        # X profile directly on the top of the main plot
-        ax_x_proj = canvas.fig.add_subplot(gs[0, 1], sharex=ax_main)
-        
-        # Y profile directly on the right of the main plot
-        ax_y_proj = canvas.fig.add_subplot(gs[1, 2], sharey=ax_main)
-        
+
         # Info panel at the bottom - without overlapping the main plot
         ax_info = canvas.fig.add_subplot(gs[2, 1])
         ax_info.axis('off')  # No axes for info panel
@@ -453,28 +485,7 @@ class RightPanel(QWidget):
         
         # Add grid lines
         ax_main.grid(True, linestyle='--', alpha=0.6)
-        
-        # Create X and Y projections (profiles) using histograms weighted by intensity
-        # For X profile - now placed directly above the phase space plot
-        x_bins = np.linspace(x_min - x_margin, x_max + x_margin, 100)
-        x_hist, _ = np.histogram(x_data, bins=x_bins, weights=intensity_data)
-        bin_centers = (x_bins[:-1] + x_bins[1:]) / 2
-        ax_x_proj.fill_between(bin_centers, 0, x_hist, alpha=0.6, color='blue')
-        ax_x_proj.plot(bin_centers, x_hist, '-', color='navy', linewidth=1.5)
-        ax_x_proj.set_ylabel('Intensity')
-        ax_x_proj.tick_params(axis='x', labelbottom=False)  # Hide x tick labels on top profile
-        ax_x_proj.grid(True, linestyle='--', alpha=0.4)
-        
-        # For Y profile - now placed directly to the right of the phase space plot
-        y_bins = np.linspace(y_min - y_margin, y_max + y_margin, 100)
-        y_hist, _ = np.histogram(y_data, bins=y_bins, weights=intensity_data)
-        bin_centers = (y_bins[:-1] + y_bins[1:]) / 2
-        ax_y_proj.fill_betweenx(bin_centers, 0, y_hist, alpha=0.6, color='green')
-        ax_y_proj.plot(y_hist, bin_centers, '-', color='darkgreen', linewidth=1.5)
-        ax_y_proj.set_xlabel('Intensity')
-        ax_y_proj.tick_params(axis='y', labelleft=False)  # Hide y tick labels on right profile
-        ax_y_proj.grid(True, linestyle='--', alpha=0.4)
-        
+
         # Add multiple RMS ellipses to the phase space plot
         self.add_rms_ellipses(ax_main, x_mean, y_mean, emittance)
         
@@ -529,42 +540,41 @@ class RightPanel(QWidget):
             pass
             
         canvas.draw()
-    
+
     def add_rms_ellipses(self, ax, x_mean, y_mean, emittance):
-        """Add multiple RMS ellipses to the phase space plot"""
+        """Add multiple RMS ellipses to the phase space plot - academic style"""
         # Calculate Twiss parameters
         if self.analyzer.emittance_results:
             results = self.analyzer.emittance_results
-            
+
             try:
                 alpha = -results['xxp'] / np.sqrt(abs(results['x_bar_sq'] * results['Xpi_sq']))
                 beta = results['x_bar_sq'] / np.sqrt(abs(results['emit_x_sq']))
                 gamma = results['Xpi_sq'] / np.sqrt(abs(results['emit_x_sq']))
-                
+
                 # Draw three RMS ellipses for 1-sigma, 2-sigma, and 3-sigma
                 for n, (color, style, width) in enumerate([
-                    ('red', '-', 1.5),      # 1-sigma
+                    ('red', '-', 1.5),  # 1-sigma
                     ('orange', '--', 1.2),  # 2-sigma
-                    ('gold', ':', 1.0)      # 3-sigma
+                    ('gold', ':', 1.0)  # 3-sigma
                 ]):
                     n_sigma = n + 1
-                    self.add_twiss_ellipse(ax, x_mean, y_mean, emittance, 
-                                         alpha, beta, gamma, 
-                                         n_sigma=n_sigma, 
-                                         color=color, linestyle=style, linewidth=width,
-                                         label=f'{n_sigma}σ')
-                
+                    self.add_twiss_ellipse(ax, x_mean, y_mean, emittance,
+                                           alpha, beta, gamma,
+                                           n_sigma=n_sigma,
+                                           color=color, linestyle=style, linewidth=width,
+                                           label=f'{n_sigma}σ')
+
                 # Add legend in upper right
                 ax.legend(loc='upper right', fontsize=8)
             except:
                 # If calculation fails, just draw a simple circle
-                theta = np.linspace(0, 2*np.pi, 100)
+                theta = np.linspace(0, 2 * np.pi, 100)
                 radius = np.sqrt(emittance)
                 x = x_mean + radius * np.cos(theta)
                 y = y_mean + radius * np.sin(theta)
                 ax.plot(x, y, 'r-', linewidth=1.5, alpha=0.8, label='1σ')
                 ax.legend(loc='upper right', fontsize=8)
-    
     def add_twiss_ellipse(self, ax, x_mean, y_mean, emittance, alpha, beta, gamma, 
                          n_sigma=1, color='red', linestyle='-', linewidth=1.5, label=None):
         """Add a properly shaped phase space ellipse using Twiss parameters"""
@@ -580,110 +590,95 @@ class RightPanel(QWidget):
         
         # Plot the ellipse
         ax.plot(x, y, color=color, linestyle=linestyle, linewidth=linewidth, alpha=0.8, label=label)
-    
+
     def display_contour_plot(self, colormap='jet', show_spots=False):
-        """Display enhanced contour plot with integrated profiles"""
+        """Display contour plot with properly positioned profiles on the axes"""
         if not hasattr(self.main_window, 'contour_data') or self.main_window.contour_data is None:
             if self.analyzer.cropped_image is None:
                 return
-                
+
             # Store data for later use
             self.main_window.contour_data = {
                 'image': self.analyzer.cropped_image,
                 'x_profile': self.analyzer.x_profile,
                 'y_profile': self.analyzer.y_profile
             }
-            
+
         # Get the data
         image_data = self.main_window.contour_data['image']
-        
+
         # Clear the canvas
         self.contour_canvas.fig.clear()
-        
-        # Create a figure with profiles integrated directly on the plot
-        gs = self.contour_canvas.fig.add_gridspec(1, 1)
-        ax_main = self.contour_canvas.fig.add_subplot(gs[0, 0])
-        
+
+        # Create a single axes for the main plot
+        ax_main = self.contour_canvas.fig.add_subplot(111)
+
         # Apply mild Gaussian smoothing for better contours
         smoothed_data = gaussian_filter(image_data, sigma=1.0)
-        
+
         # Create coordinate grids
         height, width = image_data.shape
         y_grid, x_grid = np.mgrid[0:height, 0:width]
-        
-        # Create enhanced colormap with smoother transitions
-        if colormap == 'jet':
-            # Use a custom colormap that's better than standard jet
-            colors = [(0, 0, 0.5), (0, 0, 1), (0, 0.5, 1), (0, 1, 1), 
-                      (0.5, 1, 0.5), (1, 1, 0), (1, 0.5, 0), (1, 0, 0), (0.5, 0, 0)]
-            cmap = LinearSegmentedColormap.from_list('enhanced_jet', colors)
-        else:
-            cmap = plt.get_cmap(colormap)
-        
-        # Calculate contour levels with logarithmic spacing for better detail
-        vmin = max(1, np.min(smoothed_data))
-        vmax = np.max(smoothed_data)
-        if vmax > vmin:
-            # Create more levels in the lower range for better detail
-            levels = np.logspace(np.log10(vmin), np.log10(vmax), 20)
-        else:
-            levels = 20
-            
+
+        # Get colormap
+        cmap = plt.get_cmap(colormap)
+
+        # Calculate contour levels with linear spacing
+        levels = 20
+
         # Create filled contour plot with contour lines
-        contour_filled = ax_main.contourf(x_grid, y_grid, smoothed_data, 
-                                        levels=levels, cmap=cmap)
-        contour_lines = ax_main.contour(x_grid, y_grid, smoothed_data, 
-                                      levels=levels, colors='black', 
-                                      linewidths=0.5, alpha=0.3)
-        
-        # Add profiles directly on the contour plot
-        # Integrate X profile at the top of the plot
+        contour_filled = ax_main.contourf(x_grid, y_grid, smoothed_data,
+                                          levels=levels, cmap=cmap)
+        contour_lines = ax_main.contour(x_grid, y_grid, smoothed_data,
+                                        levels=levels, colors='black',
+                                        linewidths=0.5, alpha=0.3)
+
+        # Add X profile along bottom axis (x-axis)
         if self.main_window.contour_data['x_profile'] is not None:
             x_data = np.arange(len(self.main_window.contour_data['x_profile']))
             x_profile = self.main_window.contour_data['x_profile']
-            
-            # Scale profile for better visualization (take up 10% of plot height)
-            max_height = height * 0.1
+
+            # Scale profile for better visualization
+            max_height = height * 0.15
             x_profile_scaled = x_profile / np.max(x_profile) * max_height if np.max(x_profile) > 0 else x_profile
-            
-            # Plot at the bottom edge of the image
-            ax_main.plot(x_data, x_profile_scaled, '-', color='blue', linewidth=1.5, alpha=0.7)
-            ax_main.fill_between(x_data, 0, x_profile_scaled, alpha=0.3, color='blue')
-        
-        # Integrate Y profile on the right side of the plot
+
+            # Plot at the bottom of the image using default matplotlib colors
+            ax_main.plot(x_data, height - x_profile_scaled)
+            ax_main.fill_between(x_data, height, height - x_profile_scaled, alpha=0.3)
+
+        # Add Y profile along left side (y-axis)
         if self.main_window.contour_data['y_profile'] is not None:
             y_data = np.arange(len(self.main_window.contour_data['y_profile']))
             y_profile = self.main_window.contour_data['y_profile']
-            
-            # Scale profile for better visualization (take up 10% of plot width)
-            max_width = width * 0.1
+
+            # Scale profile for better visualization
+            max_width = width * 0.15
             y_profile_scaled = y_profile / np.max(y_profile) * max_width if np.max(y_profile) > 0 else y_profile
-            
-            # Plot on the right edge of the image
-            ax_main.plot(width - y_profile_scaled, y_data, '-', color='red', linewidth=1.5, alpha=0.7)
-            ax_main.fill_betweenx(y_data, width, width - y_profile_scaled, alpha=0.3, color='red')
-        
+
+            # Plot on the left side of the image using default matplotlib colors
+            ax_main.plot(y_profile_scaled, y_data)
+            ax_main.fill_betweenx(y_data, 0, y_profile_scaled, alpha=0.3)
+
         # Add labels and title
         ax_main.set_xlabel('X Position (pixels)')
         ax_main.set_ylabel('Y Position (pixels)')
-        ax_main.set_title('Beam Intensity Contour Map', fontsize=12, fontweight='bold')
-        
+        ax_main.set_title('Beam Intensity Contour Map', fontsize=12)
+
         # Add colorbar
         cbar = self.contour_canvas.fig.colorbar(contour_filled, ax=ax_main)
         cbar.set_label('Intensity')
-        
+
         # Set reference to main axes
         self.contour_canvas.axes = ax_main
-        
+
         try:
             # Adjust layout
             self.contour_canvas.fig.tight_layout()
         except:
             # Fall back to simple draw without layout adjustment
             pass
-            
+
         self.contour_canvas.draw()
-    
     def display_surface_plot(self, colormap='jet', show_spots=False):
         """Display 3D surface plot of beam intensity"""
         if not hasattr(self.main_window, 'contour_data') or self.main_window.contour_data is None:
