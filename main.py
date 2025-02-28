@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt
 from analyzer import PepperPotAnalyzer
 from left_panel import LeftPanel
 from right_panel import RightPanel
-from toolbar_menu import setup_menus_toolbar
+from toolbar_menu import setup_menus_toolbar,setup_pat_menu
 
 
 class EmittanceAnalyzerGUI(QMainWindow):
@@ -22,9 +22,6 @@ class EmittanceAnalyzerGUI(QMainWindow):
 
         # Initialize analyzer
         self.analyzer = PepperPotAnalyzer()
-        
-        # Initialize contour data
-        self.contour_data = None
 
         # Setup UI
         self.setup_ui()
@@ -57,7 +54,7 @@ class EmittanceAnalyzerGUI(QMainWindow):
 
         # Setup menus and toolbars
         setup_menus_toolbar(self, self.left_panel, self.right_panel)
-
+        setup_pat_menu(self, self.left_panel, self.right_panel)
 
 def main():
     app = QApplication(sys.argv)

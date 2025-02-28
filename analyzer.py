@@ -1,24 +1,31 @@
 import numpy as np
 import copy
 from PIL import Image
-from scipy.ndimage import rotate
+from scipy.ndimage import rotate, median_filter, gaussian_filter
 from scipy.signal import find_peaks
+from scipy.optimize import minimize
+import random
+
 
 class PepperPotAnalyzer:
-    """Class for analyzing pepper-pot images and calculating emittance"""
+    """Class for analyzing pepper-pot images and calculating emittance using PAT-style algorithms"""
 
     def __init__(self):
-        # Default parameters
-        self.scaling = 57.87 / 1000  # Default scaling factor (mm/pixel)
+        # Default parameters (updated to match PAT defaults)
+        self.scaling = 0.048807  # Default scaling factor (mm/pixel) from PAT config
         self.offset = 0  # Default offset
-        self.distance = 41  # Default L value (distance from pepper-pot to screen in mm)
+        self.distance = 41  # Default L value (distance from pepper-pot to screen in mm) from PAT
+        self.hole_diameter = 0.1  # Hole diameter in mm (from PAT)
+        self.hole_space = 1.0  # Hole spacing in mm (from PAT)
         self.threshold = 0.2  # Default intensity threshold
         self.rotation_angle = 0  # Default rotation angle
         self.alpha = 0.57  # Default peak detection sensitivity
         self.xhole_positions = []  # X hole positions
         self.yhole_positions = []  # Y hole positions
         self.peak_size = 10  # Default peak size
-        self.intensity_scale = 1.0  # Default intensity scale factor (new parameter)
+        self.intensity_scale = 1.0  # Default intensity scale factor
+        self.spot_intensitymin = 10  # Minimum intensity for spot detection (from PAT)
+        self.spot_areamin = 5  # Minimum area for valid spots (from PAT)
 
         # Image data
         self.raw_image = None
@@ -27,6 +34,10 @@ class PepperPotAnalyzer:
         self.cropped_image = None
         self.x_profile = None
         self.y_profile = None
+        self.signal_mask = None  # Added: Binary mask for signal identification
+        self.denoised_image = None  # Added: Denoised image
+        self.fit_image = None  # Added: Curve-fitted image
+        self.combined_image = None  # Added: Combined image
 
         # Results
         self.hole_coordinates = []
@@ -93,111 +104,238 @@ class PepperPotAnalyzer:
 
         return np.std(image)
 
-    def get_peaks(self, image, sigma, alpha=0.57, size=10):
-        """Find peaks in image based on intensity thresholds"""
+    def get_background_level(self, image):
+        """Calculate background level using edge pixels (PAT method)"""
         if image is None:
-            return [], []
+            return 0
 
-        i_out = []
-        j_out = []
-        image_temp = copy.deepcopy(image)
+        height, width = image.shape
+        edge_pixels = []
 
-        while True:
-            k = np.argmax(image_temp)
-            j, i = np.unravel_index(k, image_temp.shape)
+        # Add top and bottom rows
+        edge_pixels.extend(image[0, :])
+        edge_pixels.extend(image[-1, :])
 
-            if image_temp[j, i] >= alpha * sigma:
-                i_out.append(i)
-                j_out.append(j)
+        # Add left and right columns (excluding corners)
+        edge_pixels.extend(image[1:-1, 0])
+        edge_pixels.extend(image[1:-1, -1])
 
-                # Create a mask around the peak
-                x = np.arange(i - size, i + size)
-                y = np.arange(j - size, j + size)
-                xv, yv = np.meshgrid(x, y)
+        # Calculate average of edge pixels
+        return np.mean(edge_pixels)
 
-                # Zero out the area around the peak to find the next one
-                image_temp[yv.clip(0, image_temp.shape[0] - 1),
-                xv.clip(0, image_temp.shape[1] - 1)] = 0
-            else:
-                break
-
-        return i_out, j_out
-
-    def reconstruct_4d_phase_space(self, results):
-        """Reconstruct 4D phase space density according to the paper methodology"""
-        if not results:
+    # PAT-style median filtering
+    def apply_median_filter(self, image):
+        """Apply median filter to reduce salt-and-pepper noise (PAT step 1)"""
+        if image is None:
             return None
 
-        # Extract data from results
-        Xi_merge = results['Xi_merge']  # x positions
-        Xpi_merge = results['Xpi_merge']  # x' angles
-        Yi_merge = results['Yi_merge']  # y positions
-        Ypi_merge = results['Ypi_merge']  # y' angles
-        Pi_Xmerge = results['Pi_Xmerge']  # Intensity weights
+        return median_filter(image, size=3)
 
-        # Create phase space coordinates for each beamlet
-        x_positions = self.clean_hole_sizes
-        hole_coordinates = self.hole_coordinates
+    # PAT-style mean filtering
+    def apply_mean_filter(self, image):
+        """Apply mean filter for smoothing (PAT step 2)"""
+        if image is None:
+            return None
 
-        # Calculate correlation coefficients (r) for each beamlet
-        # Default to zero if not calculable (the paper mentions this term is often low)
-        r_values = np.zeros(len(hole_coordinates))
+        return gaussian_filter(image, sigma=1)
 
-        # Create a dictionary to store phase space projections
-        phase_space = {
-            'xx_prime': {'x': Xi_merge, 'y': Xpi_merge, 'density': Pi_Xmerge},
-            'yy_prime': {'x': Yi_merge, 'y': Ypi_merge, 'density': Pi_Xmerge},
-            'xy': {'x': Xi_merge, 'y': Yi_merge, 'density': Pi_Xmerge},
-            'xy_prime': {'x': Xi_merge, 'y': Ypi_merge, 'density': Pi_Xmerge},
-            'x_prime_y': {'x': Xpi_merge, 'y': Yi_merge, 'density': Pi_Xmerge},
-            'x_prime_y_prime': {'x': Xpi_merge, 'y': Ypi_merge, 'density': Pi_Xmerge}
-        }
+    # PAT-style signal marking
+    def signal_mark(self, image):
+        """Mark signal parts of the image (PAT method)"""
+        if image is None:
+            return None, None
 
-        return phase_space
+        # 1. Detect background
+        background = self.get_background_level(image)
 
-    def ensure_consistent_data(self, results):
-        """Ensure all arrays in the results have consistent lengths"""
-        if not results:
-            return results
+        # 2. Apply median filtering
+        median_filtered = self.apply_median_filter(image)
 
-        # Find minimum length across all array data
-        array_keys = ['Xi_merge', 'Pi_Xmerge', 'Yi_merge', 'Pi_Ymerge', 'Xpi_merge', 'Ypi_merge', 'XO_merge',
-                      'YO_merge']
-        lengths = []
+        # 3. Apply mean filtering
+        smoothed = self.apply_mean_filter(median_filtered)
 
-        for key in array_keys:
-            if key in results and isinstance(results[key], np.ndarray):
-                lengths.append(len(results[key]))
+        # 4. Create signal mask based on intensity threshold
+        mask = np.zeros_like(smoothed, dtype=bool)
+        mask[smoothed > (background + self.spot_intensitymin)] = True
 
-        if not lengths:
-            return results  # No arrays found
+        # 5. Apply area filtering (remove small spots)
+        from scipy import ndimage
+        labeled_mask, num_features = ndimage.label(mask)
 
-        # Get minimum length
-        min_len = min(lengths)
+        for i in range(1, num_features + 1):
+            area = np.sum(labeled_mask == i)
+            if area < self.spot_areamin:
+                mask[labeled_mask == i] = False
 
-        # Truncate all arrays to minimum length
-        for key in array_keys:
-            if key in results and isinstance(results[key], np.ndarray):
-                results[key] = results[key][:min_len]
+        return mask, smoothed
 
-        return results
-    def radial_profile(self, data, center):
-        """Calculate radial profile around a point"""
-        y, x = np.indices((data.shape))
-        r = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2)
-        r = r.astype(np.int64)
+    # PAT-style Gaussian curve fitting
+    def gaussian_function(self, params, x, y):
+        """2D Gaussian function for curve fitting"""
+        A, x0, y0, sigma_x, sigma_y = params
+        return A * np.exp(-((x - x0) ** 2 / (2 * sigma_x ** 2) + (y - y0) ** 2 / (2 * sigma_y ** 2)))
 
-        tbin = np.bincount(r.ravel(), data.ravel())
-        nr = np.bincount(r.ravel())
+    def fit_gaussian(self, region):
+        """Fit a 2D Gaussian to a region (PAT-style curve fitting)"""
+        if region is None or np.sum(region) == 0:
+            return None, None
 
-        # Avoid division by zero
-        nr = np.where(nr == 0, 1, nr)
+        height, width = region.shape
+        y, x = np.mgrid[0:height, 0:width]
+        x = x.flatten()
+        y = y.flatten()
+        z = region.flatten()
 
-        radialprofile = tbin / nr
-        return radialprofile
+        # Initial guess
+        max_idx = np.argmax(region)
+        y_max, x_max = np.unravel_index(max_idx, region.shape)
+        max_val = region[y_max, x_max]
+
+        initial_guess = [max_val, x_max, y_max, width / 10, height / 10]
+
+        # Define error function to minimize
+        def error_function(params):
+            model = self.gaussian_function(params, x, y)
+            return np.sum((z - model) ** 2)
+
+        # Calculate "fitting rate" (Overlap/Combination)
+        def fitting_rate(params):
+            model = np.zeros_like(region)
+            for i in range(height):
+                for j in range(width):
+                    model[i, j] = self.gaussian_function(params, j, i)
+                    if model[i, j] > 1:
+                        model[i, j] = 1
+
+            overlap = 0
+            combination = 0
+
+            for i in range(height):
+                for j in range(width):
+                    if region[i, j] > 0:
+                        if model[i, j] < region[i, j]:
+                            overlap += model[i, j]
+                            combination += region[i, j]
+                        else:
+                            overlap += region[i, j]
+                            combination += model[i, j]
+                    else:
+                        combination += model[i, j]
+
+            if combination == 0:
+                return 0
+            return -overlap / combination  # Negative because we're minimizing
+
+        try:
+            # Use PAT's fitting rate instead of sum of squares
+            result = minimize(fitting_rate, initial_guess, method='Nelder-Mead')
+            fitted_params = result.x
+
+            # Create fitted Gaussian
+            fitted_data = np.zeros_like(region)
+            for i in range(height):
+                for j in range(width):
+                    fitted_data[i, j] = self.gaussian_function(fitted_params, j, i)
+
+            return fitted_data, fitted_params
+        except:
+            return None, None
+
+    def denoise_image(self, image, signal_mask):
+        """Denoise image based on signal mask (PAT method)"""
+        if image is None or signal_mask is None:
+            return None
+
+        denoised = np.zeros_like(image)
+        denoised[signal_mask] = image[signal_mask]
+        return denoised
+
+    def curve_fit_image(self, image, signal_mask):
+        """Apply curve fitting to the image (PAT method)"""
+        if image is None or signal_mask is None:
+            return None
+
+        # Label connected components
+        from scipy import ndimage
+        labeled_mask, num_spots = ndimage.label(signal_mask)
+
+        fitted_image = np.zeros_like(image, dtype=float)
+
+        # Process each spot
+        for spot_idx in range(1, num_spots + 1):
+            # Extract spot region
+            spot_mask = (labeled_mask == spot_idx)
+            y_indices, x_indices = np.where(spot_mask)
+
+            if len(x_indices) == 0 or len(y_indices) == 0:
+                continue
+
+            x_min, x_max = np.min(x_indices), np.max(x_indices)
+            y_min, y_max = np.min(y_indices), np.max(y_indices)
+
+            # Extract region with padding
+            pad = 5
+            x_min_pad = max(0, x_min - pad)
+            x_max_pad = min(image.shape[1] - 1, x_max + pad)
+            y_min_pad = max(0, y_min - pad)
+            y_max_pad = min(image.shape[0] - 1, y_max + pad)
+
+            spot_region = image[y_min_pad:y_max_pad + 1, x_min_pad:x_max_pad + 1].copy()
+            spot_mask_region = spot_mask[y_min_pad:y_max_pad + 1, x_min_pad:x_max_pad + 1]
+
+            # Set non-signal pixels to zero for fitting
+            spot_region[~spot_mask_region] = 0
+
+            # Fit Gaussian
+            fitted_region, params = self.fit_gaussian(spot_region)
+
+            if fitted_region is not None:
+                fitted_image[y_min_pad:y_max_pad + 1, x_min_pad:x_max_pad + 1] = fitted_region
+
+        return fitted_image
+
+    def combine_data(self, image, denoised_image, fitted_image, signal_mask):
+        """Combine original and fitted data (PAT method)"""
+        if image is None or denoised_image is None or fitted_image is None:
+            return None
+
+        combined = np.zeros_like(image, dtype=float)
+
+        # Use original data for signal pixels, fitted data elsewhere
+        for i in range(image.shape[0]):
+            for j in range(image.shape[1]):
+                if signal_mask[i, j]:
+                    # If pixel is saturated, use fitted value
+                    if image[i, j] >= 255:
+                        combined[i, j] = fitted_image[i, j]
+                    else:
+                        combined[i, j] = image[i, j]
+                else:
+                    combined[i, j] = fitted_image[i, j]
+
+        return combined
+
+    def preprocess_image(self, image):
+        """Full preprocessing pipeline (PAT workflow)"""
+        if image is None:
+            return None, None, None, None
+
+        # 1. Signal mark
+        signal_mask, smoothed = self.signal_mark(image)
+
+        # 2. Denoise
+        denoised = self.denoise_image(image, signal_mask)
+
+        # 3. Curve fit
+        fitted = self.curve_fit_image(image, signal_mask)
+
+        # 4. Combine data
+        combined = self.combine_data(image, denoised, fitted, signal_mask)
+
+        return signal_mask, denoised, fitted, combined
 
     def analyze_holes(self, image, hole_coordinates, threshold=0.2, peak_size=10):
-        """Analyze each hole in the image"""
+        """Analyze each hole in the image with PAT-style approach"""
         if image is None or not hole_coordinates:
             return [], []
 
@@ -217,80 +355,39 @@ class PepperPotAnalyzer:
             # Extract region around hole
             img_region = image[y_min:y_max, x_min:x_max]
 
-            # Calculate radial profile to detect hole boundaries
-            radial_prof = self.radial_profile(image, (x_hole, y_hole))
+            # Apply PAT-style analysis to region
+            region_mask, _, region_fitted, region_combined = self.preprocess_image(img_region)
 
-            try:
-                # Find first minimum in radial profile (hole boundary)
-                peaks, _ = find_peaks(-radial_prof, height=-1000, prominence=1)
+            if region_mask is None or np.sum(region_mask) < self.spot_areamin:
+                continue
 
-                if len(peaks) > 0:
-                    dx = peaks[0]
-                    dy = peaks[0]
+            # Find boundaries of the spot in the mask
+            y_indices, x_indices = np.where(region_mask)
 
-                    # Refine boundary box
-                    x_min = max(0, x_hole - dx)
-                    x_max = min(image.shape[1] - 1, x_hole + dx)
-                    y_min = max(0, y_hole - dy)
-                    y_max = min(image.shape[0] - 1, y_hole + dy)
+            if len(x_indices) == 0 or len(y_indices) == 0:
+                continue
 
-                    # Extract refined region
-                    img_region = image[y_min:y_max, x_min:x_max]
+            # Calculate region boundaries
+            local_x_min, local_x_max = np.min(x_indices), np.max(x_indices)
+            local_y_min, local_y_max = np.min(y_indices), np.max(y_indices)
 
-                    # Calculate X and Y profiles of region
-                    x_profile = np.sum(img_region, axis=0)
-                    y_profile = np.sum(img_region, axis=1)
+            # Convert to global coordinates
+            final_x_min = x_min + local_x_min
+            final_x_max = x_min + local_x_max
+            final_y_min = y_min + local_y_min
+            final_y_max = y_min + local_y_max
 
-                    # Find peaks in profiles
-                    peaks_x, _ = find_peaks(x_profile, height=0, prominence=10)
-                    peaks_y, _ = find_peaks(y_profile, height=0, prominence=10)
+            # Extract final region
+            final_region = image[final_y_min:final_y_max + 1, final_x_min:final_x_max + 1]
 
-                    # Calculate peak widths based on threshold
-                    if len(peaks_x) > 0 and len(peaks_y) > 0:
-                        # Find width of peak where intensity falls below threshold * max
-                        peak_width_x = self.find_peak_width(x_profile, peaks_x[0], threshold)
-                        peak_width_y = self.find_peak_width(y_profile, peaks_y[0], threshold)
-
-                        # Update hole boundaries based on width
-                        left_x, right_x = peak_width_x
-                        left_y, right_y = peak_width_y
-
-                        # Final boundaries
-                        final_x_min = max(0, x_hole - dx + left_x)
-                        final_x_max = min(image.shape[1] - 1, x_hole - dx + right_x)
-                        final_y_min = max(0, y_hole - dy + left_y)
-                        final_y_max = min(image.shape[0] - 1, y_hole - dy + right_y)
-
-                        # Final region
-                        final_region = image[final_y_min:final_y_max, final_x_min:final_x_max]
-
-                        # Store results
-                        clean_hole_sizes.append([final_y_min, final_y_max, final_x_min, final_x_max])
-                        clean_hole_data.append(final_region)
-            except Exception as e:
-                print(f"Error analyzing hole {hole_idx}: {e}")
+            # Store results
+            clean_hole_sizes.append([final_y_min, final_y_max + 1, final_x_min, final_x_max + 1])
+            clean_hole_data.append(final_region)
 
         return clean_hole_data, clean_hole_sizes
 
-    def find_peak_width(self, profile, peak_idx, threshold):
-        """Find width of peak at threshold * max intensity"""
-        peak_height = profile[peak_idx]
-        threshold_value = peak_height * threshold
-
-        # Find left boundary
-        left_idx = peak_idx
-        while left_idx > 0 and profile[left_idx] > threshold_value:
-            left_idx -= 1
-
-        # Find right boundary
-        right_idx = peak_idx
-        while right_idx < len(profile) - 1 and profile[right_idx] > threshold_value:
-            right_idx += 1
-
-        return left_idx, right_idx
-
     def calculate_emittance(self, hole_data, hole_sizes, x0_positions, y0_positions):
-        """Calculate beam emittance using the pepper-pot method"""
+        """Calculate beam emittance using the pepper-pot method (PAT approach)"""
         if not hole_data or not hole_sizes:
             return {}
 
@@ -299,9 +396,6 @@ class PepperPotAnalyzer:
         Pi_Xrange_list = []
         Yi_range_list = []
         Pi_Yrange_list = []
-
-        # Debug prints
-        print(f"Processing {len(hole_data)} holes")
 
         # Process each hole
         for idx, (hole_img, hole_size) in enumerate(zip(hole_data, hole_sizes)):
@@ -340,17 +434,7 @@ class PepperPotAnalyzer:
             Pi_Ymerge = np.concatenate(Pi_Yrange_list)
         except Exception as e:
             print(f"Merge error: {e}")
-            print(f"X lengths: {[len(x) for x in Xi_range_list]} total: {sum(len(x) for x in Xi_range_list)}")
-            print(f"X-profile lengths: {[len(p) for p in Pi_Xrange_list]} total: {sum(len(p) for p in Pi_Xrange_list)}")
-            print(f"Y lengths: {[len(y) for y in Yi_range_list]} total: {sum(len(y) for y in Yi_range_list)}")
-            print(f"Y-profile lengths: {[len(p) for p in Pi_Yrange_list]} total: {sum(len(p) for p in Pi_Yrange_list)}")
             return {}
-
-        # Merge all ranges and profiles
-        Xi_merge = np.concatenate(Xi_range_list)
-        Pi_Xmerge = np.concatenate(Pi_Xrange_list)
-        Yi_merge = np.concatenate(Yi_range_list)
-        Pi_Ymerge = np.concatenate(Pi_Yrange_list)
 
         # Calculate <X> and <Y>
         x_bar = np.sum(Xi_merge * Pi_Xmerge) / np.sum(Pi_Xmerge)
@@ -362,7 +446,7 @@ class PepperPotAnalyzer:
         XO_merge_list = []
         YO_merge_list = []
 
-        # Calculate divergence for each hole
+        # Calculate divergence for each hole (PAT method)
         for idx, (x_range, y_range) in enumerate(zip(Xi_range_list, Yi_range_list)):
             # Get reference position (x0, y0) for this hole
             x0 = x0_positions[min(idx, len(x0_positions) - 1)]
@@ -437,6 +521,52 @@ class PepperPotAnalyzer:
             'YO_merge': YO_merge
         }
 
-        results = self.ensure_consistent_data(results)
         self.emittance_results = results
         return results
+
+    # PAT-style Monte Carlo method for particle generation
+    def generate_particles(self, num_particles=10000):
+        """Generate particles using Monte Carlo method as in PAT"""
+        if not self.emittance_results:
+            return []
+
+        particles = []
+
+        # Get necessary values from emittance results
+        Xi_merge = self.emittance_results['Xi_merge']
+        Yi_merge = self.emittance_results['Yi_merge']
+        Xpi_merge = self.emittance_results['Xpi_merge']
+        Ypi_merge = self.emittance_results['Ypi_merge']
+        Pi_Xmerge = self.emittance_results['Pi_Xmerge']
+
+        # Normalize weights
+        weights = Pi_Xmerge / np.sum(Pi_Xmerge)
+
+        # Generate particles using Monte Carlo sampling
+        indices = np.random.choice(len(weights), size=num_particles, p=weights)
+
+        for idx in indices:
+            # Add some randomness to hole position (PAT method)
+            x_hole = self.hole_space * np.floor(Xi_merge[idx] / self.hole_space + 0.5)
+            y_hole = self.hole_space * np.floor(Yi_merge[idx] / self.hole_space + 0.5)
+
+            # Random position inside hole
+            x1 = (random.random() - 0.5) * self.hole_diameter
+            y1 = (random.random() - 0.5) * self.hole_diameter
+
+            # Particle position equals hole position plus random offset
+            x = x_hole + x1
+            y = y_hole + y1
+
+            # Angle from position and divergence (PAT calculation)
+            xp = Xpi_merge[idx]
+            yp = Ypi_merge[idx]
+
+            particles.append({
+                'x': x,
+                'y': y,
+                'xp': xp,
+                'yp': yp
+            })
+
+        return particles

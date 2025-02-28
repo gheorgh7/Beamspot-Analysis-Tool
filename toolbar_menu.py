@@ -1,5 +1,5 @@
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QToolBar, QLabel, QComboBox, QMessageBox, QFileDialog
+from PySide6.QtWidgets import QToolBar, QLabel, QComboBox, QMessageBox, QFileDialog, QInputDialog
 from PySide6.QtCore import Qt
 import os
 
@@ -139,14 +139,6 @@ def setup_menus_toolbar(main_window, left_panel, right_panel):
             if main_window.analyzer.cropped_image is not None:
                 left_panel.processed_image_canvas.fig.savefig(f"{export_dir}/processed_image.png", dpi=300,
                                                               bbox_inches='tight')
-
-            # Save contour plot
-            if hasattr(main_window, 'contour_data') and main_window.contour_data is not None:
-                right_panel.contour_canvas.fig.savefig(f"{export_dir}/contour_plot.png", dpi=300, bbox_inches='tight')
-
-            # Save surface plot
-            if hasattr(main_window, 'contour_data') and main_window.contour_data is not None:
-                right_panel.surface_canvas.fig.savefig(f"{export_dir}/surface_plot.png", dpi=300, bbox_inches='tight')
 
             # Save spots detection if available
             if main_window.analyzer.hole_coordinates:
@@ -316,14 +308,81 @@ def on_colormap_changed(main_window, left_panel, right_panel, cmap_name):
     if main_window.analyzer.cropped_image is not None and main_window.analyzer.hole_coordinates:
         right_panel.display_spots(cmap_name)
 
-    # Redisplay contour plot with current colormap if data exists
-    if hasattr(main_window, 'contour_data') and main_window.contour_data is not None:
-        right_panel.display_contour_plot(cmap_name)
-
-    # Update surface plot if data exists
-    if hasattr(main_window, 'contour_data') and main_window.contour_data is not None:
-        right_panel.display_surface_plot(cmap_name)
 
     # Update phase space plots if emittance results exist
     if main_window.analyzer.emittance_results:
         right_panel.display_phase_space(cmap_name)
+def setup_pat_menu(main_window, left_panel, right_panel):
+    """Setup PAT-specific menu items"""
+    pat_menu = main_window.menuBar().addMenu("&PAT Methods")
+
+    # Process with PAT methods
+    pat_process_action = QAction("Process Images (PAT Style)", main_window)
+    pat_process_action.triggered.connect(lambda: left_panel.process_images_pat_style())
+    pat_menu.addAction(pat_process_action)
+
+    # Analyze with PAT methods
+    pat_analyze_action = QAction("Analyze Beam (PAT Style)", main_window)
+    pat_analyze_action.triggered.connect(lambda: right_panel.analyze_spots_pat())
+    pat_menu.addAction(pat_analyze_action)
+
+    # Generate particles
+    generate_particles_action = QAction("Generate Particles (Monte Carlo)", main_window)
+    generate_particles_action.triggered.connect(lambda: generate_particles(main_window))
+    pat_menu.addAction(generate_particles_action)
+
+    pat_menu.addSeparator()
+
+    # Save particles
+    save_particles_action = QAction("Save Generated Particles", main_window)
+    save_particles_action.triggered.connect(lambda: save_particles(main_window))
+    pat_menu.addAction(save_particles_action)
+
+    # Helper functions
+    def generate_particles(main_window):
+        if not main_window.analyzer.emittance_results:
+            QMessageBox.warning(main_window, "Warning", "No emittance results available.")
+            return
+
+        num_particles, ok = QInputDialog.getInt(
+            main_window, "Number of Particles",
+            "Enter number of particles to generate:", 10000, 100, 1000000, 1000
+        )
+
+        if ok:
+            try:
+                main_window.analyzer.particles = main_window.analyzer.generate_particles(num_particles)
+                QMessageBox.information(
+                    main_window, "Success",
+                    f"Generated {len(main_window.analyzer.particles)} particles using PAT Monte Carlo method."
+                )
+            except Exception as e:
+                QMessageBox.critical(main_window, "Error", f"Error generating particles: {str(e)}")
+
+    def save_particles(main_window):
+        if not hasattr(main_window.analyzer, 'particles') or not main_window.analyzer.particles:
+            QMessageBox.warning(main_window, "Warning", "No particles to save. Generate particles first.")
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            main_window, "Save Particles", "", "Text Files (*.txt);;CSV Files (*.csv)"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            with open(filepath, 'w') as f:
+                # PAT-style particle file format
+                f.write(f"{len(main_window.analyzer.particles)}\n")
+                f.write(" 0 0 0 0 0 2.4\n")  # Header line as in PAT format
+
+                for p in main_window.analyzer.particles:
+                    # Format matches PAT output
+                    f.write(
+                        f"{p['x'] / 10:.6f}\t{p['xp'] / 1000:.6f}\t{p['y'] / 10:.6f}\t{p['yp'] / 1000:.6f}  0  \t  2.4  \t\n")
+
+            QMessageBox.information(main_window, "Success",
+                                    f"Saved {len(main_window.analyzer.particles)} particles to {filepath}")
+        except Exception as e:
+            QMessageBox.critical(main_window, "Error", f"Error saving particles: {str(e)}")

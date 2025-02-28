@@ -119,32 +119,13 @@ class RightPanel(QWidget):
         # Y-Y' plot
         self.yy_canvas = MatplotlibCanvas(self.phase_space_widget, width=5, height=4)
         self.yy_toolbar = NavigationToolbar(self.yy_canvas, self.phase_space_widget)
-        
-        # Contour plot tab
-        self.contour_widget = QWidget()
-        self.contour_layout = QVBoxLayout(self.contour_widget)
-        self.contour_canvas = MatplotlibCanvas(self.contour_widget, width=5, height=4)
-        self.contour_toolbar = NavigationToolbar(self.contour_canvas, self.contour_widget)
-        self.contour_layout.addWidget(self.contour_toolbar)
-        self.contour_layout.addWidget(self.contour_canvas)
-        
-        # Surface plot tab
-        self.surface_widget = QWidget()
-        self.surface_layout = QVBoxLayout(self.surface_widget)
-        self.surface_canvas = MatplotlibCanvas(self.surface_widget, width=5, height=4)
-        # Set up 3D axes
-        self.surface_canvas.fig.clear()
-        self.surface_canvas.axes = self.surface_canvas.fig.add_subplot(111, projection='3d')
-        self.surface_toolbar = NavigationToolbar(self.surface_canvas, self.surface_widget)
-        self.surface_layout.addWidget(self.surface_toolbar)
-        self.surface_layout.addWidget(self.surface_canvas)
+
         
         # Add tabs
         self.results_tabs.addTab(self.spots_widget, "Spot Detection")
         self.results_tabs.addTab(self.emittance_widget, "Emittance Results")
         self.results_tabs.addTab(self.phase_space_widget, "Phase Space")
-        self.results_tabs.addTab(self.contour_widget, "Contour Plot")
-        self.results_tabs.addTab(self.surface_widget, "Surface Plot")
+
         
         # Layout for phase space plots
         phase_space_container = QWidget()
@@ -221,13 +202,7 @@ class RightPanel(QWidget):
                 
             # Display phase space plots
             self.display_phase_space(self.main_window.colormap_combo.currentText())
-                
-            # Update contour plot (without spot overlay)
-            self.display_contour_plot(self.main_window.colormap_combo.currentText(), False)
-                
-            # Update surface plot (without spot overlay)
-            self.display_surface_plot(self.main_window.colormap_combo.currentText(), False)
-                
+
             # Switch to spot detection tab
             self.results_tabs.setCurrentIndex(0)
                 
@@ -252,20 +227,16 @@ class RightPanel(QWidget):
         self.spots_canvas.axes = self.spots_canvas.fig.add_subplot(111)
             
         # Create a custom spectral colormap for better visualization
-        if colormap == 'jet':
+        if colormap == 'viridis':
             # Use a slightly improved jet variant
-            cmap = cm.jet
+            cmap = cm.viridis
         else:
             cmap = plt.get_cmap(colormap)
-            
-        # Apply logarithmic normalization for better contrast
-        norm = matplotlib.colors.LogNorm(vmin=np.max([1, np.min(self.analyzer.cropped_image)]), 
-                                       vmax=np.max(self.analyzer.cropped_image))
+
             
         # Display image with enhanced colormap
         img = self.spots_canvas.axes.imshow(self.analyzer.cropped_image, 
-                                          cmap=cmap, 
-                                          norm=norm,
+                                          cmap=cmap,
                                           interpolation='bicubic')
             
         # Plot hole coordinates with more subtle visualization
@@ -548,16 +519,6 @@ class RightPanel(QWidget):
             mesh = ax.pcolormesh(x_edges, y_edges, hist_norm.T,
                                  cmap=cmap, shading='auto')
 
-            # Add contour lines for better visualization (similar to paper)
-            if np.max(hist_norm) > 0:  # Only add contours if we have meaningful data
-                contour_levels = np.linspace(0, np.max(hist_norm) * 0.95, 8)
-                if len(contour_levels) > 2:  # Only add contours if we have enough levels
-                    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
-                    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
-                    X, Y = np.meshgrid(x_centers, y_centers)
-                    contours = ax.contour(X, Y, hist_norm.T,
-                                          levels=contour_levels,
-                                          colors='white', linewidths=0.5, alpha=0.7)
 
             # Draw RMS ellipses if requested
             if draw_ellipses:
@@ -607,6 +568,89 @@ class RightPanel(QWidget):
                 else:
                     self.clear_layout(item.layout())
 
+    # Add to RightPanel class in right_panel.py
+
+    def analyze_spots_pat(self):
+        """Analyze beam spots using PAT methodology"""
+        if self.analyzer.cropped_image is None:
+            QMessageBox.warning(self.main_window, "Warning", "Please process images first.")
+            return False
+
+        try:
+            # Update analyzer parameters
+            self.analyzer.alpha = self.main_window.left_panel.alpha_spin.value()
+            self.analyzer.peak_size = self.main_window.left_panel.peak_size_spin.value()
+            self.analyzer.threshold = self.main_window.left_panel.threshold_spin.value()
+            self.analyzer.scaling = self.scaling_spin.value()
+            self.analyzer.offset = self.offset_spin.value()
+            self.analyzer.distance = self.distance_spin.value()
+            self.analyzer.spot_intensitymin = 10  # PAT default
+            self.analyzer.spot_areamin = 5  # PAT default
+
+            # Parse X0 and Y0 positions
+            try:
+                x0_positions = [float(x.strip()) for x in self.x0_edit.text().split(',')]
+                y0_positions = [float(y.strip()) for y in self.y0_edit.text().split(',')]
+            except ValueError:
+                QMessageBox.warning(self.main_window, "Warning", "Invalid X0 or Y0 positions.")
+                return False
+
+            # Use PAT-style processing if available, otherwise use original image
+            analysis_image = self.analyzer.combined_image if hasattr(self.analyzer,
+                                                                     'combined_image') and self.analyzer.combined_image is not None else self.analyzer.cropped_image
+
+            # Find spots using PAT-style signal marking
+            signal_mask, _, _, _ = self.analyzer.preprocess_image(analysis_image)
+
+            if signal_mask is None:
+                QMessageBox.warning(self.main_window, "Warning", "Failed to detect spots with PAT method.")
+                return False
+
+            # Convert mask to coordinates
+            from scipy import ndimage
+            labeled_mask, num_spots = ndimage.label(signal_mask)
+
+            hole_coordinates = []
+            for spot_idx in range(1, num_spots + 1):
+                spot_mask = (labeled_mask == spot_idx)
+                y_indices, x_indices = np.where(spot_mask)
+
+                if len(x_indices) > 0 and len(y_indices) > 0:
+                    # Use center of mass as hole coordinate
+                    x_center = int(np.mean(x_indices))
+                    y_center = int(np.mean(y_indices))
+                    hole_coordinates.append([x_center, y_center])
+
+            # Store hole positions
+            self.analyzer.hole_coordinates = hole_coordinates
+
+            # Analyze holes with PAT method
+            self.analyzer.clean_hole_data, self.analyzer.clean_hole_sizes = self.analyzer.analyze_holes(
+                analysis_image, hole_coordinates, self.analyzer.threshold, self.analyzer.peak_size
+            )
+
+            # Calculate emittance
+            emittance_results = self.analyzer.calculate_emittance(
+                self.analyzer.clean_hole_data, self.analyzer.clean_hole_sizes,
+                x0_positions, y0_positions
+            )
+
+            # Display results
+            self.display_spots(self.main_window.colormap_combo.currentText())
+            self.display_emittance_results(emittance_results)
+            self.display_phase_space(self.main_window.colormap_combo.currentText())
+
+            # Switch to spot detection tab
+            self.results_tabs.setCurrentIndex(0)
+
+            self.main_window.statusBar().showMessage(f"PAT analysis complete: {len(hole_coordinates)} spots found")
+            return True
+
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "Error", f"Error in PAT analysis: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False
     def create_phase_plot(self, canvas, title, x_data, y_data, intensity_data,
                           x_label, y_label, x_mean, y_mean, emittance, rms,
                           colormap='jet', draw_ellipses=False):
@@ -633,7 +677,7 @@ class RightPanel(QWidget):
         y_margin = 0.05 * (y_max - y_min)
 
         # Set number of bins
-        nbins = 200
+        nbins = 2000
 
         # Create 2D histogram with weighted values
         hist, x_edges, y_edges = np.histogram2d(
@@ -1002,187 +1046,7 @@ class RightPanel(QWidget):
         # Plot the ellipse
         ax.plot(x, y, color=color, linestyle=linestyle, linewidth=linewidth, alpha=0.8, label=label)
 
-    def display_contour_plot(self, colormap='jet', show_spots=False):
-        """Display contour plot with properly positioned profiles on the axes"""
-        if not hasattr(self.main_window, 'contour_data') or self.main_window.contour_data is None:
-            if self.analyzer.cropped_image is None:
-                return
 
-            # Store data for later use
-            self.main_window.contour_data = {
-                'image': self.analyzer.cropped_image,
-                'x_profile': self.analyzer.x_profile,
-                'y_profile': self.analyzer.y_profile
-            }
-
-        # Get the data
-        image_data = self.main_window.contour_data['image']
-
-        # Clear the canvas
-        self.contour_canvas.fig.clear()
-
-        # Create a single axes for the main plot
-        ax_main = self.contour_canvas.fig.add_subplot(111)
-
-        # Apply mild Gaussian smoothing for better contours
-        smoothed_data = gaussian_filter(image_data, sigma=1.0)
-
-        # Create coordinate grids
-        height, width = image_data.shape
-        y_grid, x_grid = np.mgrid[0:height, 0:width]
-
-        # Get colormap
-        cmap = plt.get_cmap(colormap)
-
-        # Calculate contour levels with linear spacing
-        levels = 20
-
-        # Create filled contour plot with contour lines
-        contour_filled = ax_main.contourf(x_grid, y_grid, smoothed_data,
-                                          levels=levels, cmap=cmap)
-        contour_lines = ax_main.contour(x_grid, y_grid, smoothed_data,
-                                        levels=levels, colors='black',
-                                        linewidths=0.5, alpha=0.3)
-
-        # Add X profile along bottom axis (x-axis)
-        if self.main_window.contour_data['x_profile'] is not None:
-            x_data = np.arange(len(self.main_window.contour_data['x_profile']))
-            x_profile = self.main_window.contour_data['x_profile']
-
-            # Scale profile for better visualization
-            max_height = height * 0.15
-            x_profile_scaled = x_profile / np.max(x_profile) * max_height if np.max(x_profile) > 0 else x_profile
-
-            # Plot at the bottom of the image using default matplotlib colors
-            ax_main.plot(x_data, height - x_profile_scaled)
-            ax_main.fill_between(x_data, height, height - x_profile_scaled, alpha=0.3)
-
-        # Add Y profile along left side (y-axis)
-        if self.main_window.contour_data['y_profile'] is not None:
-            y_data = np.arange(len(self.main_window.contour_data['y_profile']))
-            y_profile = self.main_window.contour_data['y_profile']
-
-            # Scale profile for better visualization
-            max_width = width * 0.15
-            y_profile_scaled = y_profile / np.max(y_profile) * max_width if np.max(y_profile) > 0 else y_profile
-
-            # Plot on the left side of the image using default matplotlib colors
-            ax_main.plot(y_profile_scaled, y_data)
-            ax_main.fill_betweenx(y_data, 0, y_profile_scaled, alpha=0.3)
-
-        # Add labels and title
-        ax_main.set_xlabel('X Position (pixels)')
-        ax_main.set_ylabel('Y Position (pixels)')
-        ax_main.set_title('Beam Intensity Contour Map', fontsize=12)
-
-        # Add colorbar
-        cbar = self.contour_canvas.fig.colorbar(contour_filled, ax=ax_main)
-        cbar.set_label('Intensity')
-
-        # Set reference to main axes
-        self.contour_canvas.axes = ax_main
-
-        try:
-            # Adjust layout
-            self.contour_canvas.fig.tight_layout()
-        except:
-            # Fall back to simple draw without layout adjustment
-            pass
-
-        self.contour_canvas.draw()
-    def display_surface_plot(self, colormap='jet', show_spots=False):
-        """Display 3D surface plot of beam intensity"""
-        if not hasattr(self.main_window, 'contour_data') or self.main_window.contour_data is None:
-            if self.analyzer.cropped_image is None:
-                return
-                
-            # Store data for later use
-            self.main_window.contour_data = {
-                'image': self.analyzer.cropped_image,
-                'x_profile': self.analyzer.x_profile,
-                'y_profile': self.analyzer.y_profile
-            }
-            
-        # Get the data
-        image_data = self.main_window.contour_data['image']
-        
-        # Clear the canvas and create 3D axes
-        self.surface_canvas.fig.clear()
-        ax = self.surface_canvas.fig.add_subplot(111, projection='3d')
-        
-        # Apply mild Gaussian smoothing for better surface
-        smoothed_data = gaussian_filter(image_data, sigma=1.0)
-        
-        # Create coordinate grids
-        height, width = smoothed_data.shape
-        y_grid, x_grid = np.mgrid[0:height, 0:width]
-        
-        # Downsample the grid for better performance
-        # Use every 4th point to reduce computation load
-        stride = 4
-        
-        # Get colormap
-        if colormap == 'jet':
-            cmap = plt.get_cmap('jet')
-        else:
-            cmap = plt.get_cmap(colormap)
-        
-        # Create surface plot with shading
-        surf = ax.plot_surface(
-            x_grid[::stride, ::stride],
-            y_grid[::stride, ::stride],
-            smoothed_data[::stride, ::stride],
-            cmap=cmap,
-            linewidth=0,
-            antialiased=True,
-            rstride=1,
-            cstride=1,
-            alpha=0.8
-        )
-        
-        # Add contour lines projected on bottom plane for reference
-        offset_z = np.min(smoothed_data) - 0.1 * (np.max(smoothed_data) - np.min(smoothed_data))
-        contour = ax.contourf(
-            x_grid[::stride, ::stride],
-            y_grid[::stride, ::stride],
-            smoothed_data[::stride, ::stride],
-            zdir='z',
-            offset=offset_z,
-            cmap=cmap,
-            alpha=0.5,
-            levels=10
-        )
-        
-        # Set axis limits
-        ax.set_xlim(0, width)
-        ax.set_ylim(0, height)
-        ax.set_zlim(offset_z, np.max(smoothed_data) * 1.1)
-        
-        # Set labels and title
-        ax.set_xlabel('X Position (pixels)')
-        ax.set_ylabel('Y Position (pixels)')
-        ax.set_zlabel('Intensity')
-        ax.set_title('Beam Intensity Surface Plot', fontsize=12, fontweight='bold')
-        
-        # Set optimal viewing angle
-        ax.view_init(elev=30, azim=45)
-        
-        # Add colorbar
-        cbar = self.surface_canvas.fig.colorbar(surf, ax=ax, shrink=0.7, pad=0.1)
-        cbar.set_label('Intensity')
-        
-        # Set reference to surface axes
-        self.surface_canvas.axes = ax
-        
-        try:
-            # Adjust layout without using tight_layout
-            self.surface_canvas.fig.subplots_adjust(left=0.1, right=0.9, bottom=0.1, top=0.9)
-        except:
-            # Fall back to simple draw if adjustments fail
-            pass
-            
-        self.surface_canvas.draw()
-    
     def save_numerical_results(self, filepath):
         """Save numerical results to CSV file"""
         if not self.analyzer.emittance_results:

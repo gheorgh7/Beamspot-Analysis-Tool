@@ -1,9 +1,11 @@
 import numpy as np
 from PIL import Image
+import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QTabWidget, QGridLayout, QSpinBox, QDoubleSpinBox,
-                               QGroupBox, QCheckBox, QSlider)
+                               QGroupBox, QCheckBox, QSlider, QMessageBox, QFileDialog, QInputDialog)
 from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtGui import QAction
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
@@ -260,6 +262,79 @@ class LeftPanel(QWidget):
                 self.main_window.colormap_combo.currentText()
             )
 
+    def process_images_pat_style(self):
+        """Process images with PAT-style workflow"""
+        if self.analyzer.raw_image is None:
+            self.main_window.statusBar().showMessage("Please load an image first.")
+            return False
+
+        try:
+            # Update analyzer parameters
+            self.analyzer.rotation_angle = self.rotation_spin.value()
+
+            # Subtract background if available
+            if self.analyzer.background_image is not None:
+                self.analyzer.processed_image = self.analyzer.subtract_background(
+                    self.analyzer.raw_image, self.analyzer.background_image
+                )
+            else:
+                self.analyzer.processed_image = self.analyzer.raw_image.copy()
+
+            # Rotate image
+            if self.analyzer.rotation_angle != 0:
+                self.analyzer.processed_image = self.analyzer.rotate_image(
+                    self.analyzer.processed_image, self.analyzer.rotation_angle
+                )
+
+            # Crop image
+            x_min = self.crop_x_min_spin.value()
+            x_max = self.crop_x_max_spin.value()
+            y_min = self.crop_y_min_spin.value()
+            y_max = self.crop_y_max_spin.value()
+
+            self.analyzer.cropped_image = self.analyzer.crop_image(
+                self.analyzer.processed_image, x_min, x_max, y_min, y_max
+            )
+
+            # PAT-style preprocessing
+            signal_mask, denoised, fitted, combined = self.analyzer.preprocess_image(self.analyzer.cropped_image)
+
+            # Save results to analyzer
+            self.analyzer.signal_mask = signal_mask
+            self.analyzer.denoised_image = denoised
+            self.analyzer.fit_image = fitted
+            self.analyzer.combined_image = combined
+
+            # Calculate profiles
+            self.analyzer.x_profile, self.analyzer.y_profile = self.analyzer.calculate_profiles(
+                self.analyzer.combined_image if combined is not None else self.analyzer.cropped_image
+            )
+
+            # Display the desired image based on current state
+            current_image = self.analyzer.combined_image if combined is not None else self.analyzer.cropped_image
+
+            self.display_image(
+                self.processed_image_canvas,
+                current_image,
+                "Processed Image (PAT Method)",
+                self.show_profiles_check.isChecked(),
+                self.main_window.colormap_combo.currentText()
+            )
+
+            self.main_window.statusBar().showMessage("Images processed with PAT methods")
+
+            # Switch to processed image tab
+            self.image_tabs.setCurrentIndex(2)
+
+            return True
+
+        except Exception as e:
+            self.main_window.statusBar().showMessage(f"Error in PAT processing: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+
     def on_auto_scale_changed(self, state):
         """Enable/disable manual intensity controls"""
         self.intensity_scale_spin.setEnabled(not state)
@@ -410,18 +485,7 @@ class LeftPanel(QWidget):
                 self.main_window.colormap_combo.currentText()
             )
 
-            # Store contour data for later use
-            self.main_window.contour_data = {
-                'image': self.analyzer.cropped_image,
-                'x_profile': self.analyzer.x_profile,
-                'y_profile': self.analyzer.y_profile
-            }
 
-            # Generate contour plot (will use the right panel method)
-            self.main_window.right_panel.display_contour_plot()
-
-            # Generate surface plot (will use the right panel method)
-            self.main_window.right_panel.display_surface_plot()
 
             self.main_window.statusBar().showMessage("Images processed successfully")
 
